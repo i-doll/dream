@@ -54,3 +54,13 @@ export async function validateMemory(dir: string, inputFileCount: number): Promi
 
   return { ok: errors.length === 0, errors, files: files.length };
 }
+
+/** Maps each memory file to the session it was first saved in, where its frontmatter records one. */
+export async function originSessionIds(dir: string): Promise<Map<string, string>> {
+  const origins = new Map<string, string>();
+  for (const file of await memoryFiles(dir)) {
+    const id = /^\s*originSessionId:\s*["']?([\w-]+)/m.exec(await readFile(join(dir, file), "utf8"))?.[1];
+    if (id) origins.set(file, id);
+  }
+  return origins;
+}

@@ -19,7 +19,7 @@ import {
   type Session,
 } from "./store.ts";
 import { digestTranscript } from "./transcript.ts";
-import { memoryFiles, validateMemory } from "./validate.ts";
+import { memoryFiles, originSessionIds, validateMemory } from "./validate.ts";
 
 export type Due = { due: true; sessions: Session[] } | { due: false; reason: string };
 
@@ -47,6 +47,22 @@ async function transcriptCwd(path: string): Promise<string | null> {
   if (!cwd) return null;
   const dir = JSON.parse(`"${cwd}"`) as string;
   return (await stat(dir).then((s) => s.isDirectory(), () => false)) ? dir : null;
+}
+
+// Above this, memory contents stay out of the prompt and the agent opens files itself.
+const INLINE_MEMORY_MAX_CHARS = 150_000;
+
+async function readMemories(dir: string) {
+  const memories = [];
+  let total = 0;
+  for (const path of ["MEMORY.md", ...(await memoryFiles(dir))]) {
+    const content = await readFile(join(dir, path), "utf8").catch(() => null);
+    if (content === null) continue;
+    total += content.length;
+    if (total > INLINE_MEMORY_MAX_CHARS) return null;
+    memories.push({ path, content });
+  }
+  return memories;
 }
 
 const newId = () => `drm_${new Date().toISOString().replace(/[-:.]/g, "")}${randomBytes(3).toString("hex")}`;
@@ -88,6 +104,19 @@ export async function runDream(p: ProjectPaths, config: Config, opts: RunOptions
     for (const s of sessions) {
       await writeFile(join(sessionsDir, `${s.id}.md`), digestTranscript(await readFile(s.path, "utf8"), s.id));
     }
+    // The sessions existing memories came from, when their transcripts still exist,
+    // so the critique can check what the user actually said.
+    const originsDir = join(runDir, "origins");
+    await mkdir(originsDir);
+    const inputIds = new Set(sessions.map((s) => s.id));
+    let originCount = 0;
+    for (const originId of new Set((await originSessionIds(p.memoryDir)).values())) {
+      if (inputIds.has(originId)) continue;
+      const jsonl = await readFile(join(p.projectDir, `${originId}.jsonl`), "utf8").catch(() => null);
+      if (jsonl === null) continue;
+      await writeFile(join(originsDir, `${originId}.md`), digestTranscript(jsonl, originId));
+      originCount++;
+    }
 
     const record: DreamRecord = {
       type: "dream",
@@ -105,6 +134,7 @@ export async function runDream(p: ProjectPaths, config: Config, opts: RunOptions
       usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
       cost_usd: 0,
       summary: null,
+      deletions: [],
       error: null,
     };
     state.dreams.push(record);
@@ -119,7 +149,7 @@ export async function runDream(p: ProjectPaths, config: Config, opts: RunOptions
 
     let result: SDKResultMessage | undefined;
     try {
-      result = await consolidate(outputDir, sessionsDir, sessions, config, log);
+      result = await consolidate({ outputDir, sessionsDir, originsDir, originCount, sessions, config, log, deletions: record.deletions });
     } catch (err) {
       return await finish({ status: "failed", error: { type: "internal_error", message: String(err) } });
     }
@@ -146,6 +176,7 @@ export async function runDream(p: ProjectPaths, config: Config, opts: RunOptions
 
     await promote(p, runDir);
     await rm(sessionsDir, { recursive: true, force: true });
+    await rm(originsDir, { recursive: true, force: true });
     state.lastConsolidatedAt = startedAt;
     await finish({ status: "completed", outputs: [{ type: "memory_dir", path: p.memoryDir }] });
     await pruneRuns(p);
@@ -155,29 +186,47 @@ export async function runDream(p: ProjectPaths, config: Config, opts: RunOptions
   }
 }
 
-async function consolidate(
-  outputDir: string,
-  sessionsDir: string,
-  sessions: Session[],
-  config: Config,
-  log: (line: string) => void,
-): Promise<SDKResultMessage> {
+type ConsolidateInput = {
+  outputDir: string;
+  sessionsDir: string;
+  originsDir: string;
+  originCount: number;
+  sessions: Session[];
+  config: Config;
+  log: (line: string) => void;
+  /** Filled in as the agent deletes memories. */
+  deletions: { path: string; reason: string }[];
+};
+
+async function consolidate(i: ConsolidateInput): Promise<SDKResultMessage> {
+  const { outputDir, sessions, config, log } = i;
   const memoryServer = createSdkMcpServer({
     name: "memory",
     tools: [
-      tool("delete_memory", "Delete one memory file from the memory folder.", { path: z.string() }, async ({ path }) => {
-        if (!inside(outputDir, path)) return { content: [{ type: "text", text: "Refused: path is outside the memory folder." }], isError: true };
-        await rm(resolve(outputDir, path), { force: true });
-        return { content: [{ type: "text", text: `Deleted ${relative(outputDir, resolve(outputDir, path))}` }] };
-      }),
+      tool(
+        "delete_memory",
+        "Delete one memory file from the memory folder. The reason is shown to the user in the dream's record.",
+        { path: z.string(), reason: z.string().describe("One sentence: why this memory should not exist.") },
+        async ({ path, reason }) => {
+          if (!inside(outputDir, path)) return { content: [{ type: "text", text: "Refused: path is outside the memory folder." }], isError: true };
+          const rel = relative(outputDir, resolve(outputDir, path));
+          await rm(resolve(outputDir, path), { force: true });
+          i.deletions.push({ path: rel, reason });
+          log(`  deleted ${rel}: ${reason}`);
+          return { content: [{ type: "text", text: `Deleted ${rel}` }] };
+        },
+      ),
     ],
   });
 
   const projectCwd = sessions[0] ? await transcriptCwd(sessions[0].path) : null;
   const prompt = dreamPrompt({
     memoryDir: outputDir,
-    sessionsDir,
+    sessionsDir: i.sessionsDir,
     sessionCount: sessions.length,
+    originsDir: i.originsDir,
+    originCount: i.originCount,
+    memories: await readMemories(outputDir),
     projectCwd,
     today: new Date().toISOString().slice(0, 10),
     instructions: config.instructions,

@@ -21,6 +21,9 @@ A project is due when its last dream was at least 24 hours ago and at least 3 tr
 
 1. Takes a per-project lock, copies `~/.claude/projects/<project>/memory/` into a staging folder, and condenses each new transcript into a short digest. The digest keeps your messages and Claude's replies and gives each tool call one line.
 2. Runs Claude on the staging copy. It can read anything but can write only inside that copy, and it doesn't load your settings or hooks.
+   - Before merging anything, Claude questions every existing memory, including ones no session contradicts. It deletes memories that came from a one-time instruction, a single offhand remark, or its own guess.
+   - When a memory's original session is still on disk, Claude checks what you actually said there.
+   - Each deletion carries a reason, and `dream status <dir>` lists them.
 3. Validates the result. Every memory needs `name` and `description` frontmatter, every link in `MEMORY.md` has to resolve, the index has to stay under 200 lines and 25 KB, and a store that had memories can't come back empty.
 4. If a live session changed the memory in the meantime, the dream is dropped and the next one retries. Otherwise the old folder moves to `~/.claude/dreams/<project>/runs/<id>/before` and the new one takes its place.
 

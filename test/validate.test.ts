@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { validateMemory } from "../src/validate.ts";
+import { originSessionIds, validateMemory } from "../src/validate.ts";
 
 const memo = (name: string) => `---\nname: ${name}\ndescription: one line about ${name}\nmetadata:\n  type: feedback\n---\n\nBody.\n`;
 
@@ -48,5 +48,16 @@ describe("validateMemory", () => {
 
   it("accepts an empty output for an empty input", async () => {
     expect((await validateMemory(await dir({}), 0)).ok).toBe(true);
+  });
+});
+
+describe("originSessionIds", () => {
+  it("collects each memory's origin session from its frontmatter", async () => {
+    const d = await dir({
+      "MEMORY.md": "- [A](a.md) — hook\n",
+      "a.md": "---\nname: a\ndescription: d\nmetadata:\n  type: feedback\n  originSessionId: 33b70819-915d\n---\nBody\n",
+      "b.md": memo("b"),
+    });
+    expect(await originSessionIds(d)).toEqual(new Map([["a.md", "33b70819-915d"]]));
   });
 });

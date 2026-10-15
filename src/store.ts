@@ -17,6 +17,8 @@ export type DreamRecord = {
   usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number };
   cost_usd: number;
   summary: string | null;
+  /** Memories the dream deleted, with the agent's reason for each. */
+  deletions: { path: string; reason: string }[];
   error: { type: string; message: string } | null;
 };
 
