@@ -72,8 +72,9 @@ async function status(arg: string | undefined) {
     for (const d of state.dreams.slice(arg ? -10 : -1)) {
       const note = d.rolled_back_at ? " (rolled back)" : d.error ? `: ${d.error.type}` : "";
       console.log(`  ${d.created_at.slice(0, 16)}  ${d.id}  ${d.status}${note}  ${d.inputs[1].session_ids.length} sessions  $${d.cost_usd.toFixed(2)}`);
+      // Only a completed dream reaches the live memory; a failed one's deletions never happened.
       // Records from before deletions were tracked have no list.
-      if (arg) for (const del of d.deletions ?? []) console.log(`      deleted ${del.path}: ${del.reason}`);
+      if (arg && d.status === "completed") for (const del of d.deletions ?? []) console.log(`      deleted ${del.path}: ${del.reason}`);
     }
   }
 }

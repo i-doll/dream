@@ -60,4 +60,9 @@ describe("originSessionIds", () => {
     });
     expect(await originSessionIds(d)).toEqual(new Map([["a.md", "33b70819-915d"]]));
   });
+
+  it("ignores originSessionId lines outside the frontmatter", async () => {
+    const d = await dir({ "a.md": `${memo("a")}\nExample:\noriginSessionId: not-a-real-origin\n` });
+    expect(await originSessionIds(d)).toEqual(new Map());
+  });
 });
