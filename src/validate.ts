@@ -5,6 +5,8 @@ import { join } from "node:path";
 const INDEX_MAX_LINES = 200;
 const INDEX_MAX_BYTES = 25_000;
 
+const frontmatter = (text: string) => /^---\n([\s\S]*?)\n---/.exec(text)?.[1];
+
 export type Validation = { ok: boolean; errors: string[]; files: number };
 
 /** Markdown memory files under `dir`, relative paths, excluding the MEMORY.md index. */
@@ -32,7 +34,7 @@ export async function validateMemory(dir: string, inputFileCount: number): Promi
 
   for (const file of files) {
     const text = await readFile(join(dir, file), "utf8");
-    const fm = /^---\n([\s\S]*?)\n---/.exec(text)?.[1];
+    const fm = frontmatter(text);
     if (!fm || !/^name:\s*\S/m.test(fm) || !/^description:\s*\S/m.test(fm)) {
       errors.push(`${file}: missing frontmatter with name and description`);
     }
@@ -53,4 +55,15 @@ export async function validateMemory(dir: string, inputFileCount: number): Promi
   }
 
   return { ok: errors.length === 0, errors, files: files.length };
+}
+
+/** Maps each memory file to the session it was first saved in, where its frontmatter records one. */
+export async function originSessionIds(dir: string): Promise<Map<string, string>> {
+  const origins = new Map<string, string>();
+  for (const file of await memoryFiles(dir)) {
+    const fm = frontmatter(await readFile(join(dir, file), "utf8")) ?? "";
+    const id = /^\s*originSessionId:\s*["']?([\w-]+)/m.exec(fm)?.[1];
+    if (id) origins.set(file, id);
+  }
+  return origins;
 }
